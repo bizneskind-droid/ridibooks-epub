@@ -5,3 +5,6 @@ __pycache__/
 *.epub
 chapters/
 .DS_Store
+# секреты сессии — держим только локально
+cookies.txt
+storage_state.json

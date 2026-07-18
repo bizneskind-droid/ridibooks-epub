@@ -8,6 +8,8 @@
 На этом VPS (Ubuntu, AppArmor) нужен --no-sandbox — уже прописан в launch().
 """
 
+import json
+import os
 import re
 import time
 from cloakbrowser import launch
@@ -19,6 +21,65 @@ from lxml import etree
 CONTENT_SELECTOR = "#viewer_contents"          # стабильный id читалки
 OG_TITLE = 'meta[property="og:title"]'          # "<название книги> N화"
 COVER_URL = "https://img.ridicdn.net/cover/{book_id}"
+
+# --- Куки для платных глав / залогиненной сессии ---
+# Ищем рядом со скриптом (или путь в переменной окружения RIDI_COOKIES).
+# Поддерживаем два формата:
+#   cookies.txt          — Netscape, из расширения "Get cookies.txt LOCALLY"
+#   storage_state.json   — родной формат Playwright (куки + localStorage)
+COOKIES_TXT = "cookies.txt"
+STORAGE_STATE_JSON = "storage_state.json"
+
+
+def _script_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def parse_netscape_cookies(path):
+    """cookies.txt (Netscape) -> список куки для Playwright add_cookies()."""
+    cookies = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            # '#HttpOnly_' — валидная строка, обычные '#' комментарии пропускаем
+            if line.startswith("#HttpOnly_"):
+                line = line[len("#HttpOnly_"):]
+            elif not line.strip() or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 7:
+                continue
+            domain, _flag, cpath, secure, expires, name, value = parts
+            cookie = {
+                "name": name,
+                "value": value,
+                "domain": domain,
+                "path": cpath,
+                "secure": secure.upper() == "TRUE",
+            }
+            if expires and expires != "0":
+                cookie["expires"] = int(expires)
+            cookies.append(cookie)
+    return cookies
+
+
+def find_cookie_source():
+    """Возвращает ('storage_state'|'cookies'|None, значение).
+    storage_state -> путь к json; cookies -> список куки."""
+    env = os.environ.get("RIDI_COOKIES")
+    candidates = []
+    if env:
+        candidates.append(env)
+    d = _script_dir()
+    candidates += [os.path.join(d, STORAGE_STATE_JSON),
+                   os.path.join(d, COOKIES_TXT)]
+    for path in candidates:
+        if not path or not os.path.exists(path):
+            continue
+        if path.endswith(".json"):
+            return "storage_state", path
+        return "cookies", parse_netscape_cookies(path)
+    return None, None
 
 STYLE_CSS = """
 body {
@@ -125,7 +186,19 @@ def main():
     cover_set = False
 
     browser = launch(headless=True, args=["--no-sandbox"])
-    page = browser.new_page()
+
+    kind, value = find_cookie_source()
+    if kind == "storage_state":
+        context = browser.new_context(storage_state=value)
+        print(f"Куки загружены из {os.path.basename(value)}")
+    else:
+        context = browser.new_context()
+        if kind == "cookies":
+            context.add_cookies(value)
+            print(f"Куки загружены ({len(value)} шт.) из cookies.txt")
+        else:
+            print("Куки не найдены — качаю как гость (только бесплатные главы).")
+    page = context.new_page()
 
     try:
         num_ch = 1

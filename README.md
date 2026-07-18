@@ -11,9 +11,18 @@
 
 ## Установка
 
+С помощью [uv](https://github.com/astral-sh/uv) (быстрее):
+
+```bash
+uv venv
+uv pip install -r requirements.txt
+```
+
+Либо через обычный venv + pip:
+
 ```bash
 python3 -m venv venv
-./venv/bin/pip install cloakbrowser ebooklib lxml
+./venv/bin/pip install -r requirements.txt
 ```
 
 Бинарник cloakbrowser (~200 МБ) скачается автоматически при первом запуске.
@@ -21,7 +30,8 @@ python3 -m venv venv
 ## Использование
 
 ```bash
-./venv/bin/python ridibooks.py
+uv run ridibooks.py      # если ставили через uv
+./venv/bin/python ridibooks.py   # если через pip
 ```
 
 Скрипт спросит адреса первой и последней главы:

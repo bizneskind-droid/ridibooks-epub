@@ -20,6 +20,7 @@ from lxml import etree
 # --- Селекторы / источники данных (проверены на живой странице ridibooks) ---
 CONTENT_SELECTOR = "#viewer_contents"          # стабильный id читалки
 OG_TITLE = 'meta[property="og:title"]'          # "<название книги> N화"
+OG_URL = 'meta[property="og:url"]'              # содержит book_id — якорь главы
 COVER_URL = "https://img.ridicdn.net/cover/{book_id}/xxlarge"  # 480x689 вместо 120x172
 
 # --- Кэш глав: повторный запуск не качает заново, только недостающее ---
@@ -164,14 +165,23 @@ def load_chapter(page, book_id):
             break
         time.sleep(2)
 
-    # Контент читалки (mxviewer) дорисовывается JS — ждём появления.
+    # SPA-читалка ridibooks: при переходе на новую главу метаданные (og:url)
+    # и контent обновляются не мгновенно, старая глава ещё висит в DOM.
+    # Ждём, пока og:url не станет указывать на НУЖНЫЙ book_id — иначе поймаем
+    # предыдущую главу и запишем дубль в кэш.
     page.wait_for_selector(f"{CONTENT_SELECTOR}", timeout=30000)
-    # даём тексту догрузиться
-    for _ in range(15):
+    marker = f"/books/{book_id}/"
+    for _ in range(20):
+        og_url = page.locator(OG_URL).get_attribute("content") or ""
         body = page.locator(CONTENT_SELECTOR).inner_html()
-        if len(body) > 500:
+        if marker in og_url and len(body) > 500:
             break
         page.wait_for_timeout(1000)
+
+    og_url = page.locator(OG_URL).get_attribute("content") or ""
+    if marker not in og_url:
+        # Страница так и не переключилась на нужную главу — не отдаём чужой контент.
+        raise RuntimeError(f"og:url={og_url!r} не соответствует book_id {book_id}")
 
     og_title = page.locator(OG_TITLE).get_attribute("content")
     body = page.locator(CONTENT_SELECTOR).inner_html()

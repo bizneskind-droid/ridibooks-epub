@@ -1,0 +1,14 @@
+[project]
+name = "ridibooks-epub"
+version = "0.1.0"
+description = "Download ridibooks.com chapters into a single EPUB (cloakbrowser + ebooklib)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cloakbrowser",
+    "ebooklib",
+    "lxml",
+]
+
+[project.scripts]
+ridibooks-epub = "ridibooks:main"

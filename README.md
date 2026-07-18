@@ -14,6 +14,13 @@
 С помощью [uv](https://github.com/astral-sh/uv) (быстрее):
 
 ```bash
+uv sync
+```
+
+`uv sync` читает `pyproject.toml`, создаёт `.venv` и ставит зависимости из
+`uv.lock`. Если предпочитаешь `requirements.txt`:
+
+```bash
 uv venv
 uv pip install -r requirements.txt
 ```

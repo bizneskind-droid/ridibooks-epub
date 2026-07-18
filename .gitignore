@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 *.epub
 chapters/
+cache/
 .DS_Store
 # секреты сессии — держим только локально
 cookies.txt

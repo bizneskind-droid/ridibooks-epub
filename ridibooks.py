@@ -20,7 +20,10 @@ from lxml import etree
 # --- Селекторы / источники данных (проверены на живой странице ridibooks) ---
 CONTENT_SELECTOR = "#viewer_contents"          # стабильный id читалки
 OG_TITLE = 'meta[property="og:title"]'          # "<название книги> N화"
-COVER_URL = "https://img.ridicdn.net/cover/{book_id}"
+COVER_URL = "https://img.ridicdn.net/cover/{book_id}/xxlarge"  # 480x689 вместо 120x172
+
+# --- Кэш глав: повторный запуск не качает заново, только недостающее ---
+CACHE_DIR = "cache"            # рядом со скриптом, ключ = book_id
 
 # --- Куки для платных глав / залогиненной сессии ---
 # Ищем рядом со скриптом (или путь в переменной окружения RIDI_COOKIES).
@@ -80,6 +83,29 @@ def find_cookie_source():
             return "storage_state", path
         return "cookies", parse_netscape_cookies(path)
     return None, None
+
+
+def cache_path(book_id):
+    return os.path.join(_script_dir(), CACHE_DIR, f"{book_id}.json")
+
+
+def read_cache(book_id):
+    """Возвращает (og_title, body) из кэша или None."""
+    p = cache_path(book_id)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        return d["og_title"], d["body"]
+    except Exception:
+        return None
+
+
+def write_cache(book_id, og_title, body):
+    os.makedirs(os.path.join(_script_dir(), CACHE_DIR), exist_ok=True)
+    with open(cache_path(book_id), "w", encoding="utf-8") as f:
+        json.dump({"og_title": og_title, "body": body}, f, ensure_ascii=False)
 
 STYLE_CSS = """
 body {
@@ -152,12 +178,18 @@ def load_chapter(page, book_id):
     return og_title, body
 
 
-def fetch_cover(page, book_id):
-    """Скачивает обложку по предсказуемому CDN-URL. Возвращает bytes или None."""
+def fetch_cover(book_id):
+    """Скачивает обложку по предсказуемому CDN-URL (обычный HTTP, без браузера).
+    Возвращает bytes или None."""
+    import urllib.request
     try:
-        resp = page.request.get(COVER_URL.format(book_id=book_id))
-        if resp.ok:
-            return resp.body()
+        req = urllib.request.Request(
+            COVER_URL.format(book_id=book_id),
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status == 200:
+                return resp.read()
     except Exception:
         pass
     return None
@@ -185,29 +217,44 @@ def main():
     book_title_set = False
     cover_set = False
 
-    browser = launch(headless=True, args=["--no-sandbox"])
+    # Браузер запускаем лениво — только если есть незакэшированные главы.
+    # Повторный прогон, где всё уже в кэше, обойдётся без Chromium вообще.
+    state = {"browser": None, "page": None}
 
-    kind, value = find_cookie_source()
-    if kind == "storage_state":
-        context = browser.new_context(storage_state=value)
-        print(f"Куки загружены из {os.path.basename(value)}")
-    else:
-        context = browser.new_context()
-        if kind == "cookies":
-            context.add_cookies(value)
-            print(f"Куки загружены ({len(value)} шт.) из cookies.txt")
+    def get_page():
+        if state["page"] is not None:
+            return state["page"]
+        browser = launch(headless=True, args=["--no-sandbox"])
+        kind, value = find_cookie_source()
+        if kind == "storage_state":
+            context = browser.new_context(storage_state=value)
+            print(f"Куки загружены из {os.path.basename(value)}")
         else:
-            print("Куки не найдены — качаю как гость (только бесплатные главы).")
-    page = context.new_page()
+            context = browser.new_context()
+            if kind == "cookies":
+                context.add_cookies(value)
+                print(f"Куки загружены ({len(value)} шт.) из cookies.txt")
+            else:
+                print("Куки не найдены — качаю как гость (только бесплатные главы).")
+        state["browser"] = browser
+        state["page"] = context.new_page()
+        return state["page"]
 
     try:
         num_ch = 1
         for book_id in range(first_id, last_id + 1):
-            try:
-                og_title, body = load_chapter(page, book_id)
-            except Exception as e:
-                print(f"[{book_id}] пропущена: {type(e).__name__} {e}")
-                continue
+            cached = read_cache(book_id)
+            if cached:
+                og_title, body = cached
+                from_cache = True
+            else:
+                try:
+                    og_title, body = load_chapter(get_page(), book_id)
+                except Exception as e:
+                    print(f"[{book_id}] пропущена: {type(e).__name__} {e}")
+                    continue
+                write_cache(book_id, og_title, body)
+                from_cache = False
 
             book_name, chap_name = split_book_and_chapter(og_title)
 
@@ -216,7 +263,7 @@ def main():
                 book_title_set = True
 
             if not cover_set:
-                cover_bytes = fetch_cover(page, book_id)
+                cover_bytes = fetch_cover(book_id)
                 if cover_bytes:
                     book.set_cover("cover.jpg", cover_bytes)
                     cover_set = True
@@ -235,11 +282,13 @@ def main():
             toc.append(chapter)
             spine.append(chapter)
 
-            print(f"[{book_id}] {title}")
+            print(f"[{book_id}] {title}" + ("  (из кэша)" if from_cache else ""))
             num_ch += 1
-            page.wait_for_timeout(1000)
+            if not from_cache:
+                state["page"].wait_for_timeout(1000)
     finally:
-        browser.close()
+        if state["browser"] is not None:
+            state["browser"].close()
 
     if not book_title_set:
         book.set_title("Unknown")
